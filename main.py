@@ -1,13 +1,10 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
-app = FastAPI(
-    title="Video Stream Extractor API",
-    description="A simple API to extract direct video stream URLs using yt-dlp"
-)
+app = FastAPI(title="Video Stream Extractor API")
 
-# Enable CORS so you can call this API from web applications
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,32 +15,37 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "API is running. Use /extract?url=YOUR_URL to get the video stream."}
+    return {"message": "API is running."}
 
 @app.get("/extract")
 def extract_video_info(url: str = Query(..., description="The video URL to extract metadata from")):
     ydl_opts = {
-        'format': 'best',  # Fetches the best pre-merged video/audio format available
+        'format': 'best',
         'noplaylist': True,
         'quiet': True,
-        # Avoid getting geo-blocked if running on cloud servers
-        'nocheckcertificate': True, 
+        'nocheckcertificate': True,
+        
+        # 1. Enable TLS & Browser Impersonation (Tricks TikTok's bot mitigation systems)
+        'impersonate': ImpersonateTarget.from_str('chrome'),
+        
+        # 2. Inject realistic desktop HTTP request headers
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate',
+        }
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # download=False ensures we only fetch metadata, making it instant
             info = ydl.extract_info(url, download=False)
             
-            # Extract title and direct stream URL
             video_title = info.get('title')
             video_url = info.get('url') or (info.get('formats', [{}])[-1].get('url') if info.get('formats') else None)
             
             if not video_url:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Direct downloadable stream URL could not be found for this video."
-                )
+                raise HTTPException(status_code=400, detail="Direct stream URL not found.")
                 
             return {
                 "status": "success",
@@ -54,4 +56,4 @@ def extract_video_info(url: str = Query(..., description="The video URL to extra
             }
             
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"yt-dlp extraction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
